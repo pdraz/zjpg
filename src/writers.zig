@@ -91,19 +91,6 @@ pub fn writeSOS(writer: *std.io.Writer) !void {
     try writer.writeByte(0); // Successive approximation
 }
 
-// Quantize DCT coefficient with rounding toward zero
-pub fn quantizeCoeff(coeff: i16, quant_value: u8) i16 {
-    if (quant_value == 0) unreachable;
-    const qv: i16 = @intCast(quant_value);
-
-    // Add half the quantization value for rounding before division
-    if (coeff >= 0) {
-        return @divTrunc(coeff + @divTrunc(qv, 2), qv);
-    } else {
-        return @divTrunc(coeff - @divTrunc(qv, 2), qv);
-    }
-}
-
 const McuConfig = struct {
     mcu_width: u32,
     mcu_height: u32,
@@ -179,14 +166,8 @@ pub fn encodeColorImage(writer: *std.io.Writer, width: u32, height: u32, rgb_pix
                 var y_block: [64]u8 = undefined;
                 extractComponentBlock(rgb_pixels, width, height, block_x, block_y, 0, &y_block);
 
-                var y_dct: [64]i16 = undefined;
-                dct8x8(&y_block, &y_dct);
-
                 var y_quantized: [64]i16 = undefined;
-                for (0..64) |i| {
-                    const zigzag_idx = constants.ZIGZAG_ORDER[i];
-                    y_quantized[i] = quantizeCoeff(y_dct[zigzag_idx], luma_table[zigzag_idx]);
-                }
+                dct8x8_quantize(&y_block, luma_table, &y_quantized);
 
                 const y_dc_diff = y_quantized[0] - prev_dc_y;
                 try encodeDCCoefficientComponent(&bit_writer, y_dc_diff, false);
@@ -197,14 +178,8 @@ pub fn encodeColorImage(writer: *std.io.Writer, width: u32, height: u32, rgb_pix
             var cb_block: [64]u8 = undefined;
             extractChromaBlockSubsampled(rgb_pixels, width, height, mcu_x, mcu_y, 1, config.chroma_h_factor, config.chroma_v_factor, config.mcu_width, config.mcu_height, &cb_block);
 
-            var cb_dct: [64]i16 = undefined;
-            dct8x8(&cb_block, &cb_dct);
-
             var cb_quantized: [64]i16 = undefined;
-            for (0..64) |i| {
-                const zigzag_idx = constants.ZIGZAG_ORDER[i];
-                cb_quantized[i] = quantizeCoeff(cb_dct[zigzag_idx], chroma_table[zigzag_idx]);
-            }
+            dct8x8_quantize(&cb_block, chroma_table, &cb_quantized);
 
             const cb_dc_diff = cb_quantized[0] - prev_dc_cb;
             try encodeDCCoefficientComponent(&bit_writer, cb_dc_diff, true);
@@ -214,14 +189,8 @@ pub fn encodeColorImage(writer: *std.io.Writer, width: u32, height: u32, rgb_pix
             var cr_block: [64]u8 = undefined;
             extractChromaBlockSubsampled(rgb_pixels, width, height, mcu_x, mcu_y, 2, config.chroma_h_factor, config.chroma_v_factor, config.mcu_width, config.mcu_height, &cr_block);
 
-            var cr_dct: [64]i16 = undefined;
-            dct8x8(&cr_block, &cr_dct);
-
             var cr_quantized: [64]i16 = undefined;
-            for (0..64) |i| {
-                const zigzag_idx = constants.ZIGZAG_ORDER[i];
-                cr_quantized[i] = quantizeCoeff(cr_dct[zigzag_idx], chroma_table[zigzag_idx]);
-            }
+            dct8x8_quantize(&cr_block, chroma_table, &cr_quantized);
 
             const cr_dc_diff = cr_quantized[0] - prev_dc_cr;
             try encodeDCCoefficientComponent(&bit_writer, cr_dc_diff, true);
@@ -232,6 +201,7 @@ pub fn encodeColorImage(writer: *std.io.Writer, width: u32, height: u32, rgb_pix
 
     try bit_writer.flush();
 }
+
 
 // Get the magnitude (number of bits needed) to represent a coefficient
 // This is log2(abs(value)) + 1, or equivalently the position of the MSB
@@ -327,37 +297,80 @@ fn encodeACCoefficientsComponent(
     }
 }
 
-// Perform 8x8 DCT (Discrete Cosine Transform) on an input block
-// JPEG DCT is level-shifted by -128 before transformation
-pub fn dct8x8(input: *const [64]u8, output: *[64]i16) void {
-    var temp: [64]f32 = undefined;
+// AAN (Arai-Agui-Nakajima, 1988) fast DCT + quantization.
+// The butterfly produces output scaled by 8*aanscale[u]*aanscale[v], which
+// is absorbed into the quantization divisor so no separate descaling step
+// is needed. Reference: libjpeg jfdctflt.c (IJG, public domain).
 
-    for (0..64) |i| {
-        temp[i] = @as(f32, @floatFromInt(input[i])) - 128.0;
+const AAN_SCALE = [8]f32{
+    1.0, 1.387039845, 1.306562965, 1.175875602,
+    1.0, 0.785694958, 0.541196100, 0.275899379,
+};
+
+// In-place 1-D AAN 8-point DCT on an array of 8 floats.
+fn aan1d(x: *[8]f32) void {
+    // Stage 1 – pairwise butterflies
+    const s0 = x[0] + x[7];  const s7 = x[0] - x[7];
+    const s1 = x[1] + x[6];  const s6 = x[1] - x[6];
+    const s2 = x[2] + x[5];  const s5 = x[2] - x[5];
+    const s3 = x[3] + x[4];  const s4 = x[3] - x[4];
+
+    // Even part
+    const e0 = s0 + s3;  const e3 = s0 - s3;
+    const e1 = s1 + s2;  const e2 = s1 - s2;
+    x[0] = e0 + e1;
+    x[4] = e0 - e1;
+    const z1 = (e2 + e3) * 0.707106781; // cos(π/4)
+    x[2] = e3 + z1;
+    x[6] = e3 - z1;
+
+    // Odd part
+    const o0 = s4 + s5;
+    const o1 = s5 + s6;
+    const o2 = s6 + s7;
+    const z5 = (o0 - o2) * 0.382683433; // cos(3π/8)
+    const z2 = 0.541196100 * o0 + z5;   // cos(3π/8) rotator
+    const z4 = 1.306562965 * o2 + z5;   // cos(π/8)  rotator
+    const z3 = o1 * 0.707106781;
+    const z6 = s7 + z3;  const z7 = s7 - z3;
+    x[5] = z7 + z2;
+    x[3] = z7 - z2;
+    x[1] = z6 + z4;
+    x[7] = z6 - z4;
+}
+
+// 2-D AAN DCT + quantization in one pass.
+// output[i] = quantized coefficient at zigzag scan position i.
+pub fn dct8x8_quantize(input: *const [64]u8, quant: *const [64]u8, output: *[64]i16) void {
+    var work: [64]f32 = undefined;
+
+    // Level-shift
+    for (0..64) |i| work[i] = @as(f32, @floatFromInt(input[i])) - 128.0;
+
+    // Row transforms
+    for (0..8) |row| {
+        var r: [8]f32 = work[row * 8 ..][0..8].*;
+        aan1d(&r);
+        work[row * 8 ..][0..8].* = r;
     }
 
-    var intermediate: [64]f32 = undefined;
-
-    for (0..8) |row| {
-        for (0..8) |col| {
-            var sum: f32 = 0.0;
-            for (0..8) |x| {
-                sum += temp[row * 8 + x] * constants.DCT_COS[col][x];
-            }
-            intermediate[row * 8 + col] = sum;
-        }
+    // Column transforms
+    for (0..8) |col| {
+        var c: [8]f32 = undefined;
+        for (0..8) |row| c[row] = work[row * 8 + col];
+        aan1d(&c);
+        for (0..8) |row| work[row * 8 + col] = c[row];
     }
 
-    for (0..8) |row| {
-        for (0..8) |col| {
-            var sum: f32 = 0.0;
-            for (0..8) |y| {
-                sum += intermediate[y * 8 + col] * constants.DCT_COS[row][y];
-            }
-            const rounded = @round(sum);
-            const clamped = @max(-32768.0, @min(32767.0, rounded));
-            output[row * 8 + col] = @intFromFloat(clamped);
-        }
+    // Quantize with AAN de-scaling, output in zigzag order
+    for (0..64) |scan| {
+        const nat: usize = constants.ZIGZAG_ORDER[scan];
+        const u: usize   = nat % 8;
+        const v: usize   = nat / 8;
+        // Divisor = quant_value * 8 * aanscale[u] * aanscale[v]
+        const divisor = @as(f32, @floatFromInt(quant[nat])) * 8.0 * AAN_SCALE[u] * AAN_SCALE[v];
+        const coeff   = @round(work[nat] / divisor);
+        output[scan]  = @intFromFloat(@max(-32768.0, @min(32767.0, coeff)));
     }
 }
 
@@ -372,9 +385,9 @@ pub fn rgbToYCbCr(r: u8, g: u8, b: u8) struct { y: u8, cb: u8, cr: u8 } {
     const cr = 128.0 + (0.5 * rf - 0.418688 * gf - 0.081312 * bf);
 
     return .{
-        .y = @intFromFloat(@max(0.0, @min(255.0, y))),
-        .cb = @intFromFloat(@max(0.0, @min(255.0, cb))),
-        .cr = @intFromFloat(@max(0.0, @min(255.0, cr))),
+        .y = @intFromFloat(@round(@max(0.0, @min(255.0, y)))),
+        .cb = @intFromFloat(@round(@max(0.0, @min(255.0, cb)))),
+        .cr = @intFromFloat(@round(@max(0.0, @min(255.0, cr)))),
     };
 }
 

@@ -256,7 +256,6 @@ pub fn main() !void {
 - **4:1:1** - Maximum compression for low-quality previews or thumbnails
 
 **Note:** You can combine subsampling with quality settings for optimal compression:
-
 ```zig
 const tables = zjpg.QuantizationTables.standard(85);
 
@@ -285,11 +284,9 @@ Convenience function for one-shot encoding.
 - `subsampling: SubsamplingMode` - Chroma subsampling mode (`.@"4:4:4"`, `.@"4:2:2"`, `.@"4:2:0"`, or `.@"4:1:1"`)
 
 **Returns:**
-
 - `[]u8` - JPEG file data (caller owns memory, must free)
 
 **Errors:**
-
 - `error.InvalidDimensions` - Width or height is 0
 - `error.DimensionsTooLarge` - Width or height > 65535
 - `error.InvalidDataSize` - RGB data size doesn't match width × height × 3
@@ -418,6 +415,9 @@ zig build
 
 # Run tests
 zig build test
+
+# Run example
+zig build run
 ```
 
 ## Testing

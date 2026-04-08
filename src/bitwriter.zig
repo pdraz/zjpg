@@ -23,8 +23,8 @@ pub const BitWriter = struct {
             const byte = @as(u8, @truncate(self.buffer >> @as(u5, @truncate(self.bits_in_buffer - 8))));
             try self.writer.writeByte(byte);
 
-            // 0xFF in entropy-coded data must be followed by 0x00
-            // to prevent confusion with JPEG markers
+            // Byte stuffing: 0xFF in entropy-coded data must be followed by 0x00
+            // to prevent confusion with JPEG markers (all start with 0xFF)
             if (byte == 0xFF) {
                 try self.writer.writeByte(0x00);
             }
