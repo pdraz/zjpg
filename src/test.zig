@@ -2,6 +2,15 @@ const std = @import("std");
 const test_image = @import("test_image.zig");
 const zjpg = @import("root.zig");
 
+const test_output_dir = "test_output";
+
+fn createTestFile(name: []const u8) !std.fs.File {
+    std.fs.cwd().makePath(test_output_dir) catch {};
+    var path_buf: [256]u8 = undefined;
+    const path = try std.fmt.bufPrint(&path_buf, test_output_dir ++ "/{s}", .{name});
+    return std.fs.cwd().createFile(path, .{});
+}
+
 // Checks that a JPEG byte slice has correct structure:
 //   SOI marker, APP0/JFIF header, EOI at end, byte stuffing in entropy data.
 fn assertValidJpeg(data: []const u8) !void {
@@ -76,7 +85,7 @@ test "various resolutions" {
 
         try std.testing.expect(jpeg_data.len > 100);
 
-        const file = std.fs.cwd().createFile(tc.name, .{}) catch |err| {
+        const file = createTestFile(tc.name) catch |err| {
             std.debug.print("Warning: couldn't create {s}: {}\n", .{ tc.name, err });
             continue;
         };
@@ -122,7 +131,7 @@ test "custom quantization" {
 
         var filename_buf: [32]u8 = undefined;
         const filename = try std.fmt.bufPrint(&filename_buf, "test_quality{}.jpg", .{quality});
-        const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
+        const file = createTestFile(filename) catch |err| {
             std.debug.print("Warning: couldn't create {s}: {}\n", .{ filename, err });
             continue;
         };
@@ -143,7 +152,7 @@ test "custom quantization" {
     try std.testing.expect(jpeg_data.len > 100);
 
     const filename = "test_quality_custom.jpg";
-    const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
+    const file = createTestFile(filename) catch |err| {
         std.debug.print("Warning: couldn't create {s}: {}\n", .{ filename, err });
         return;
     };
@@ -182,7 +191,7 @@ test "chroma subsampling - all modes" {
 
     std.debug.print("\nChroma subsampling (32x32 gradient image):\n", .{});
     for (files) |f| {
-        const file = std.fs.cwd().createFile(f.name, .{}) catch |err| {
+        const file = createTestFile(f.name) catch |err| {
             std.debug.print("Warning: couldn't create {s}: {}\n", .{ f.name, err });
             continue;
         };
@@ -441,7 +450,7 @@ test "custom quantization tables" {
         .{ .name = "test_custom_dc_only.jpg", .data = jpeg_dc_only },
     };
     for (save_cases) |sc| {
-        const f = std.fs.cwd().createFile(sc.name, .{}) catch continue;
+        const f = createTestFile(sc.name) catch continue;
         defer f.close();
         f.writeAll(sc.data) catch {};
     }

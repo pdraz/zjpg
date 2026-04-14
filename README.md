@@ -265,7 +265,6 @@ Requires Zig 0.15.1 or newer.
 ```bash
 zig build        # build library
 zig build test   # run tests
-zig build run    # run demo
 ```
 
 ## Testing
@@ -274,7 +273,7 @@ zig build run    # run demo
 zig build test
 ```
 
-Test images are written to the project root (`test_*.jpg`). They use synthetic patterns (checkerboards, color blocks), which compress differently than natural photos.
+Test images are written to `test_output/`. They use synthetic patterns (checkerboards, color blocks), which compress differently than natural photos.
 
 ## Limitations
 
