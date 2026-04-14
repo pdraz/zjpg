@@ -91,7 +91,6 @@ test "public API" {
 
     std.debug.print("\nPublic API tests:\n", .{});
 
-    // Test JpegEncoder
     var encoder = zjpg.JpegEncoder.init(allocator);
     defer encoder.deinit();
 
@@ -100,7 +99,6 @@ test "public API" {
     try std.testing.expect(jpeg_encoder.len > 100);
     std.debug.print("  JpegEncoder.encode(): {} bytes\n", .{jpeg_encoder.len});
 
-    // Test convenience function
     const jpeg_convenience = try zjpg.encodeRGB(allocator, 10, 10, &test_image.TEST_IMAGE_10x10_RGB, null, .@"4:4:4");
     defer allocator.free(jpeg_convenience);
     try std.testing.expect(jpeg_convenience.len > 100);
@@ -110,7 +108,6 @@ test "public API" {
 test "custom quantization" {
     const allocator = std.testing.allocator;
 
-    // Test standard quality levels
     const quality_levels = [_]u8{ 100, 85, 50, 10 };
     var quality_results: [4]usize = undefined;
 
@@ -123,7 +120,6 @@ test "custom quantization" {
         try std.testing.expect(jpeg_data.len > 100);
         quality_results[i] = jpeg_data.len;
 
-        // Save test file
         var filename_buf: [32]u8 = undefined;
         const filename = try std.fmt.bufPrint(&filename_buf, "test_quality{}.jpg", .{quality});
         const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
@@ -135,7 +131,6 @@ test "custom quantization" {
         std.debug.print("  Quality {}: {} bytes -> {s}\n", .{ quality, jpeg_data.len, filename });
     }
 
-    // Test fully custom tables
     var custom_tables: zjpg.QuantizationTables = undefined;
     for (0..64) |i| {
         custom_tables.luma[i] = 50;
@@ -147,7 +142,7 @@ test "custom quantization" {
 
     try std.testing.expect(jpeg_data.len > 100);
 
-		const filename = "test_quality_custom.jpg";
+    const filename = "test_quality_custom.jpg";
     const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
         std.debug.print("Warning: couldn't create {s}: {}\n", .{ filename, err });
         return;
@@ -173,13 +168,11 @@ test "chroma subsampling - all modes" {
     const jpeg_411 = try zjpg.encodeRGB(allocator, 32, 32, &test_image.TEST_IMAGE_32x32_RGB, null, .@"4:1:1");
     defer allocator.free(jpeg_411);
 
-    // Verify all modes produce valid JPEG data
     try std.testing.expect(jpeg_444.len > 100);
     try std.testing.expect(jpeg_422.len > 100);
     try std.testing.expect(jpeg_420.len > 100);
     try std.testing.expect(jpeg_411.len > 100);
 
-    // Save test files and display results
     const files = [_]struct { name: []const u8, data: []const u8, mode: []const u8 }{
         .{ .name = "test_444.jpg", .data = jpeg_444, .mode = "4:4:4" },
         .{ .name = "test_422.jpg", .data = jpeg_422, .mode = "4:2:2" },
