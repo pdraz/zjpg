@@ -137,7 +137,7 @@ fn encodeRGB(
     width: u32,
     height: u32,
     rgb_data: []const u8,
-    quant_tables: ?*const QuantizationTables,  // null = standard(100)
+    quant_tables: ?*const QuantizationTables,  // null = default()
     subsampling: SubsamplingMode,
 ) ![]u8
 ```
