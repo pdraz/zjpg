@@ -2,7 +2,7 @@
 
 JPEG encoder for Zig. Takes RGB image data, produces standard JPEG files. No external dependencies.
 
-Useful when you need JPEG output in a Zig project without pulling in C libraries, or when you need precise control over compression — per-coefficient quantization tables for luma and chroma independently, all four standard chroma subsampling modes, and quality presets compatible with standard JPEG tooling.
+Useful when you need JPEG output in a Zig project without pulling in C libraries, or when you need precise control over compression. Supports per-coefficient quantization tables for luma and chroma independently, all four standard chroma subsampling modes, and quality presets compatible with standard JPEG tooling.
 
 ## Installation
 
@@ -24,18 +24,28 @@ In `build.zig`, first get the dependency:
 const zjpg_dep = b.dependency("zjpg", .{ .target = target, .optimize = optimize });
 ```
 
-Then add it to your module using whichever form fits:
+Then add it to your module using whichever form you prefer:
 
-**`addImport`** — when you have a module variable (e.g., from `b.addModule`):
+**`addImport`** — when you have a module variable:
+
 ```zig
-mod.addImport("zjpg", zjpg_dep.module("zjpg"));
+exe.root_module.addImport("zjpg", zjpg_dep.module("zjpg"));
 ```
 
-**`.imports`** — when creating a module inline (e.g., inside `b.addExecutable` or `b.createModule`):
+**`.imports`** — when creating a module inline:
+
 ```zig
-.imports = &.{
-    .{ .name = "zjpg", .module = zjpg_dep.module("zjpg") },
-},
+const exe = b.addExecutable(.{
+    .name = "",
+    .root_module = b.createModule(.{
+        .root_source_file = b.path(""),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zjpg", .module = zjpg_dep.module("zjpg") },
+        },
+    }),
+});
 ```
 
 ### Manual
@@ -73,7 +83,7 @@ pub fn main() !void {
         }
     }
 
-    // null = default quantization tables
+    // null = default quantization tables = zjpg.QuantizationTables.standard(100)
     const jpeg_data = try zjpg.encodeRGB(allocator, width, height, rgb_pixels, null, .@"4:4:4");
     defer allocator.free(jpeg_data);
 
@@ -86,31 +96,10 @@ pub fn main() !void {
 ### Quality presets
 
 ```zig
-const std = @import("std");
-const zjpg = @import("zjpg");
+// Quality 1–100: higher = better quality, larger file
+const tables = zjpg.QuantizationTables.standard(85);
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const width = 640;
-    const height = 480;
-    var rgb_pixels = try allocator.alloc(u8, width * height * 3);
-    defer allocator.free(rgb_pixels);
-
-    // Fill with your image data (see one-shot example above)
-
-    // Quality 1–100: higher = better quality, larger file
-    const tables = zjpg.QuantizationTables.standard(85);
-
-    const jpeg_data = try zjpg.encodeRGB(allocator, width, height, rgb_pixels, &tables, .@"4:2:0");
-    defer allocator.free(jpeg_data);
-
-    const file = try std.fs.cwd().createFile("output.jpg", .{});
-    defer file.close();
-    try file.writeAll(jpeg_data);
-}
+const jpeg_data = try zjpg.encodeRGB(allocator, width, height, rgb_pixels, &tables, .@"4:2:0");
 ```
 
 ### Custom quantization tables
@@ -118,57 +107,12 @@ pub fn main() !void {
 Full per-coefficient control over luma and chroma quantization independently. Values 1–255; lower = less loss.
 
 ```zig
-const std = @import("std");
-const zjpg = @import("zjpg");
+var tables: zjpg.QuantizationTables = undefined;
+// Each array has 64 entries — one per DCT coefficient in natural (row-major) order, not zigzag
+for (0..64) |i| tables.luma[i]   = 4;   // high luma quality
+for (0..64) |i| tables.chroma[i] = 64;  // aggressive chroma compression
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const width = 640;
-    const height = 480;
-    var rgb_pixels = try allocator.alloc(u8, width * height * 3);
-    defer allocator.free(rgb_pixels);
-
-    // Fill with your image data (see one-shot example above)
-
-    var tables: zjpg.QuantizationTables = undefined;
-    // Each array has 64 entries — one per DCT coefficient in natural (row-major) order, not zigzag
-    for (0..64) |i| tables.luma[i]   = 4;   // high luma quality
-    for (0..64) |i| tables.chroma[i] = 64;  // aggressive chroma compression
-
-    const jpeg_data = try zjpg.encodeRGB(allocator, width, height, rgb_pixels, &tables, .@"4:4:4");
-    defer allocator.free(jpeg_data);
-
-    const file = try std.fs.cwd().createFile("output.jpg", .{});
-    defer file.close();
-    try file.writeAll(jpeg_data);
-}
-```
-
-### Chroma subsampling
-
-Reduces file size by storing chrominance at lower resolution than luminance. For natural photos, 4:2:0 typically yields meaningfully smaller files than 4:4:4 with minimal perceptual difference. The actual reduction varies with content, image dimensions, and quality setting. 4:1:1 discards more horizontal chroma than 4:2:0 but can produce larger output in some cases — its 32×8 MCU layout compresses differently than 4:2:0's 16×16 blocks depending on the image.
-
-| Mode | Description |
-|------|-------------|
-| `4:4:4` | No subsampling — full color resolution |
-| `4:2:2` | Half horizontal chroma |
-| `4:2:0` | Half horizontal + vertical chroma (most common for photos) |
-| `4:1:1` | Quarter horizontal chroma |
-
-Combine with quality presets (see [basic example](#basic-encoding) for full setup):
-
-```zig
-const tables_hi = zjpg.QuantizationTables.standard(85);
-const tables_lo = zjpg.QuantizationTables.standard(50);
-
-const photo     = try zjpg.encodeRGB(allocator, w, h, pixels, &tables_hi, .@"4:2:0");
-defer allocator.free(photo);
-
-const thumbnail = try zjpg.encodeRGB(allocator, w, h, pixels, &tables_lo, .@"4:2:0");
-defer allocator.free(thumbnail);
+const jpeg_data = try zjpg.encodeRGB(allocator, width, height, rgb_pixels, &tables, .@"4:4:4");
 ```
 
 ### Object-oriented style
@@ -193,7 +137,7 @@ fn encodeRGB(
     width: u32,
     height: u32,
     rgb_data: []const u8,
-    quant_tables: ?*const QuantizationTables,  // null = default (same as standard(100))
+    quant_tables: ?*const QuantizationTables,  // null = standard(100)
     subsampling: SubsamplingMode,
 ) ![]u8
 ```
@@ -210,10 +154,8 @@ Returns owned slice. Caller must free.
 ```zig
 fn init(allocator: std.mem.Allocator) JpegEncoder
 fn deinit(self: *JpegEncoder) void  // currently no-op
-fn encode(self: *JpegEncoder, width, height, rgb_data, quant_tables, subsampling) ![]u8
+fn encode(self: *JpegEncoder, width, height, rgb_data, quant_tables, subsampling) ![]u8 // Same parameters and errors as encodeRGB
 ```
-
-Same parameters and errors as `encodeRGB`.
 
 ### `QuantizationTables`
 
@@ -222,7 +164,7 @@ pub const QuantizationTables = struct {
     luma:   [64]u8,
     chroma: [64]u8,
 
-    pub fn default() QuantizationTables              // same as standard(100); also what null produces in encodeRGB
+    pub fn default() QuantizationTables              // same as standard(100)
     pub fn standard(quality: u8) QuantizationTables  // quality: 1–100; values outside range are clamped
 };
 ```
